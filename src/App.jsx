@@ -562,87 +562,270 @@ const DidYouKnowBox = () => {
 
 
 // ARENA MODE: THE W-VORTEX
+// REPLACEMENT COMPONENT: THE HIVEMIND (3D Neural Network)
 const ArenaOverlay = ({ onExit }) => {
-    const [tunnelElements, setTunnelElements] = useState([]);
-    const [terminalLines, setTerminalLines] = useState([
-        "CONNECTING TO MAINFRAME...",
-        "BYPASSING SECURITY...",
-        "ACCESS GRANTED.",
-        "DOWNLOADING WINNER_PROTOCOLS.EXE...",
-    ]);
+    const canvasRef = useRef(null);
+    const requestRef = useRef();
+    const [nodeCount, setNodeCount] = useState(0); // Fake UI counter
+    
+    // Mutable State for Physics
+    const state = useRef({
+        nodes: [],
+        pulses: [], // Active shockwaves
+        rotation: { x: 0, y: 0 },
+        targetRotation: { x: 0, y: 0 },
+        mouse: { x: 0, y: 0 },
+        active: true
+    });
 
     useEffect(() => {
-        SoundEngine.init();
-        SoundEngine.startArenaLoop(); // Start continuous loop
+        // 1. Audio Start
+        if (typeof SoundEngine !== 'undefined') {
+            SoundEngine.init();
+            SoundEngine.startArenaLoop(); 
+        }
 
-        // Generate Tunnel Rings
-        const rings = Array.from({ length: 40 }).map((_, i) => ({
-            id: i,
-            delay: i * 0.1, 
-            rotation: i * 15
-        }));
-        setTunnelElements(rings);
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
 
-        // Terminal Typewriter Effect
-        const interval = setInterval(() => {
-            const possibleLines = [
-                "L-RATIO: 0.00%", "ANALYZING MARKET DEPTH...", "SHORT SQUEEZE IMMINENT", 
-                "DIAMOND HANDS DETECTED", "PUMP.JS LOADED", "ERROR: TOO MUCH WINNING",
-                "TARGET: ANDROMEDA GALAXY", "VOLUME: INFINITE"
-            ];
-            const newLine = possibleLines[Math.floor(Math.random() * possibleLines.length)];
-            setTerminalLines(prev => [...prev.slice(-8), newLine]);
-        }, 800);
+        // --- CONFIGURATION ---
+        const NODE_COUNT = width < 768 ? 80 : 180;
+        const CONNECTION_DIST = 100;
+        const ROTATION_SPEED = 0.05;
+        
+        // --- INITIALIZE 3D NODES ---
+        // We create points on a sphere surface + some internal volume
+        for (let i = 0; i < NODE_COUNT; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            const r = 200 + Math.random() * 200; // Radius variation
+            
+            state.current.nodes.push({
+                x: r * Math.sin(phi) * Math.cos(theta),
+                y: r * Math.sin(phi) * Math.sin(theta),
+                z: r * Math.cos(phi),
+                baseX: r * Math.sin(phi) * Math.cos(theta),
+                baseY: r * Math.sin(phi) * Math.sin(theta),
+                baseZ: r * Math.cos(phi),
+                pulse: 0, // Light up intensity
+                id: Math.random().toString(36).substr(2, 4).toUpperCase()
+            });
+        }
+
+        // --- EVENTS ---
+        const handleResize = () => {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        };
+        
+        const handleMouseMove = (e) => {
+            // Map mouse to rotation angles
+            const nx = (e.clientX / width) * 2 - 1;
+            const ny = (e.clientY / height) * 2 - 1;
+            state.current.targetRotation.y = nx * 2;
+            state.current.targetRotation.x = -ny * 2;
+            state.current.mouse = { x: e.clientX, y: e.clientY };
+        };
+
+        const handleClick = () => {
+            // Spawn a pulse
+            if (typeof SoundEngine !== 'undefined') SoundEngine.click();
+            state.current.pulses.push({
+                r: 0,
+                speed: 15,
+                life: 1.0
+            });
+        };
+
+        window.addEventListener('resize', handleResize);
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('click', handleClick);
+
+        // --- 3D MATH HELPERS ---
+        const rotate3D = (x, y, z, rotX, rotY) => {
+            // Rotate Y
+            let cosY = Math.cos(rotY);
+            let sinY = Math.sin(rotY);
+            let x1 = x * cosY - z * sinY;
+            let z1 = z * cosY + x * sinY;
+            
+            // Rotate X
+            let cosX = Math.cos(rotX);
+            let sinX = Math.sin(rotX);
+            let y2 = y * cosX - z1 * sinX;
+            let z2 = z1 * cosX + y * sinX;
+            
+            return { x: x1, y: y2, z: z2 };
+        };
+
+        // --- RENDER LOOP ---
+        const loop = () => {
+            if (!state.current.active) return;
+            
+            // Fake UI Update
+            setNodeCount(prev => Math.min(prev + 11, NODE_COUNT * 442));
+
+            // Smooth Rotation
+            state.current.rotation.x += (state.current.targetRotation.x - state.current.rotation.x) * ROTATION_SPEED;
+            state.current.rotation.y += (state.current.targetRotation.y - state.current.rotation.y) * ROTATION_SPEED;
+            // Auto spin
+            state.current.rotation.y += 0.002;
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
+            const centerX = width / 2;
+            const centerY = height / 2;
+            
+            // 1. Process Nodes & Project to 2D
+            const projectedNodes = state.current.nodes.map(node => {
+                // Decay pulse
+                if (node.pulse > 0) node.pulse -= 0.05;
+
+                // Rotate
+                const r = rotate3D(node.baseX, node.baseY, node.baseZ, state.current.rotation.x, state.current.rotation.y);
+                
+                // Project (Perspective)
+                const fov = 800;
+                const scale = fov / (fov + r.z + 400); // +400 pushes it back slightly
+                const x2d = (r.x * scale) + centerX;
+                const y2d = (r.y * scale) + centerY;
+
+                // Check Pulses collision
+                state.current.pulses.forEach(p => {
+                     // Simple distance check in 3D space isn't perfect but good enough visual
+                     // Actually, check against the "Pulse Radius" in 3D
+                     // Let's assume pulse originates from center (0,0,0)
+                     const distFromCenter = Math.sqrt(node.baseX**2 + node.baseY**2 + node.baseZ**2);
+                     if (Math.abs(distFromCenter - p.r) < 30) {
+                         node.pulse = 1.0;
+                     }
+                });
+
+                return { ...node, x2d, y2d, scale, z: r.z };
+            });
+
+            // 2. Sort by Z for depth (painter's algorithm)
+            projectedNodes.sort((a, b) => b.z - a.z);
+
+            // 3. Draw Connections
+            ctx.lineWidth = 1;
+            for (let i = 0; i < projectedNodes.length; i++) {
+                const n1 = projectedNodes[i];
+                // Optimization: only check nearby in array (not perfect but faster) 
+                // or just check all (expensive but N is low enough)
+                for (let j = i + 1; j < projectedNodes.length; j++) {
+                    const n2 = projectedNodes[j];
+                    const dx = n1.x2d - n2.x2d;
+                    const dy = n1.y2d - n2.y2d;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+
+                    if (dist < CONNECTION_DIST * n1.scale) {
+                        const alpha = 1 - (dist / (CONNECTION_DIST * n1.scale));
+                        // If either node is pulsing, line is bright
+                        const pulseFactor = Math.max(n1.pulse, n2.pulse);
+                        
+                        ctx.strokeStyle = pulseFactor > 0.1 
+                            ? `rgba(255, 255, 255, ${alpha})` // White hot
+                            : `rgba(204, 255, 0, ${alpha * 0.3})`; // Dim Green
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(n1.x2d, n1.y2d);
+                        ctx.lineTo(n2.x2d, n2.y2d);
+                        ctx.stroke();
+                    }
+                }
+            }
+
+            // 4. Draw Nodes
+            projectedNodes.forEach(node => {
+                const size = 3 * node.scale + (node.pulse * 5);
+                ctx.fillStyle = node.pulse > 0.1 ? '#fff' : '#ccff00';
+                
+                ctx.beginPath();
+                ctx.arc(node.x2d, node.y2d, size, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Draw Text IDs for "Close" nodes
+                if (node.scale > 0.8 && node.pulse > 0.1) {
+                    ctx.font = '10px monospace';
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(node.id, node.x2d + 10, node.y2d);
+                }
+            });
+
+            // 5. Update Pulses
+            for (let i = state.current.pulses.length - 1; i >= 0; i--) {
+                const p = state.current.pulses[i];
+                p.r += p.speed;
+                p.life -= 0.01;
+                if (p.life <= 0 || p.r > 1000) state.current.pulses.splice(i, 1);
+            }
+
+            requestRef.current = requestAnimationFrame(loop);
+        };
+
+        requestRef.current = requestAnimationFrame(loop);
 
         return () => {
-            clearInterval(interval);
-            SoundEngine.stopArenaLoop(); // Kill sound on unmount/exit
+            window.removeEventListener('resize', handleResize);
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('click', handleClick);
+            if (requestRef.current) cancelAnimationFrame(requestRef.current);
+            if (typeof SoundEngine !== 'undefined') SoundEngine.stopArenaLoop();
         };
     }, []);
 
     return (
-        <div className="fixed inset-0 z-[10000] bg-black arena-container cursor-none">
+        <div className="fixed inset-0 z-[10000] bg-black cursor-crosshair overflow-hidden">
+            <canvas ref={canvasRef} className="block w-full h-full" />
             
-            {/* 3D TUNNEL */}
-            {tunnelElements.map(el => (
-                <div 
-                    key={el.id} 
-                    className="tunnel-w text-9xl font-black"
-                    style={{ 
-                        animation: `tunnel-move 4s linear infinite`,
-                        animationDelay: `${el.delay}s`,
-                        transform: `rotate(${el.rotation}deg)` // Initial offset
-                    }}
-                >
-                    W
+            {/* UI OVERLAY */}
+            <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-8 flex flex-col justify-between">
+                
+                {/* Header */}
+                <div className="flex justify-between items-start">
+                    <div>
+                        <div className="text-[var(--accent)] font-black font-anton text-2xl tracking-widest animate-pulse">
+                            THE HIVEMIND
+                        </div>
+                        <div className="text-white font-mono text-xs opacity-70">
+                            GLOBAL CONSENSUS: 100%
+                        </div>
+                    </div>
+                    <div className="text-right font-mono text-xs text-[var(--accent)]">
+                        <div>ACTIVE NODES: {nodeCount}</div>
+                        <div>LATENCY: 0ms</div>
+                    </div>
                 </div>
-            ))}
 
-            {/* EXIT BUTTON (FIXED TOP RIGHT) */}
-            <button 
-                onClick={onExit}
-                // Removed onMouseEnter hover sound
-                className="absolute top-8 right-8 z-50 border-2 border-red-500 bg-black text-red-500 hover:bg-red-500 hover:text-black px-6 py-2 font-mono font-bold tracking-widest uppercase transition-all flex items-center gap-2 cursor-pointer"
-            >
-                <Power size={18} /> EJECT
-            </button>
-
-            {/* TERMINAL OVERLAY */}
-            <div className="absolute bottom-8 left-8 z-50 font-mono text-xs md:text-sm text-[var(--accent)] opacity-80 pointer-events-none bg-black/80 p-4 border-l-2 border-[var(--accent)]">
-                <div className="flex items-center gap-2 mb-2 border-b border-neutral-800 pb-2 text-white">
-                    <Terminal size={14} /> CLASSIFIED_FEED
+                {/* Center Message */}
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center mix-blend-difference">
+                    <div className="text-white font-mono text-xs tracking-[0.5em] mb-4 opacity-50">
+                        CLICK TO BROADCAST SIGNAL
+                    </div>
                 </div>
-                {terminalLines.map((line, i) => (
-                    <div key={i} className="mb-1">{'>'} {line}</div>
-                ))}
-                <div className="animate-pulse">_</div>
-            </div>
 
-            {/* CENTER FLAVOR TEXT */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <h1 className="text-white font-black text-6xl md:text-8xl mix-blend-difference animate-pulse text-center">
-                    REALITY<br/><span className="text-[var(--accent)]">BREACHED</span>
-                </h1>
+                {/* Footer */}
+                <div className="flex justify-between items-end">
+                    <div className="font-mono text-xs text-neutral-500 max-w-xs">
+                        Connected to mainnet. You are Node #001. 
+                        Do not break the chain.
+                    </div>
+                    <button 
+                        onClick={onExit}
+                        className="pointer-events-auto border border-white text-white hover:bg-white hover:text-black px-8 py-3 font-mono font-bold tracking-widest uppercase transition-all flex items-center gap-2 backdrop-blur-md"
+                    >
+                        <Power size={18} /> DISCONNECT
+                    </button>
+                </div>
             </div>
         </div>
     );
