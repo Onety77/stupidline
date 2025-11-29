@@ -574,87 +574,457 @@ const DidYouKnowBox = () => {
 
 // ARENA MODE: THE W-VORTEX
 const ArenaOverlay = ({ onExit }) => {
-    const [tunnelElements, setTunnelElements] = useState([]);
-    const [terminalLines, setTerminalLines] = useState([
-        "CONNECTING TO MAINFRAME...",
-        "BYPASSING SECURITY...",
-        "ACCESS GRANTED.",
-        "DOWNLOADING WINNER_PROTOCOLS.EXE...",
-    ]);
+    const canvasRef = useRef(null);
+    const requestRef = useRef();
+    
+    // UI State
+    const [dominance, setDominance] = useState(0); 
+    const [highScore, setHighScore] = useState(0);
+    const [gameState, setGameState] = useState('IDLE'); 
+    const [activePerk, setActivePerk] = useState(null); // 'LEVERAGE' or 'HODL' or null
+    const [currentStage, setCurrentStage] = useState("VOID");
 
+    // Mutable State
+    const state = useRef({
+        grid: [],
+        cols: 0,
+        rows: 0,
+        pointers: new Map(),
+        frame: 0,
+        sessionHigh: 0,
+        hasStarted: false,
+        // Power Up State
+        floatingItem: null, // { x, y, dx, dy, type, trail: [] }
+        perkTimer: 0,       // How many frames the perk lasts
+        nextSpawnTime: 300, // Frames until next spawn
+    });
+
+    // Audio Ref
+    const audioRef = useRef({ ctx: null, oscillator: null, gainNode: null, noiseNode: null, noiseGain: null, filter: null });
+
+    const config = {
+        fontSize: 16,
+        baseDecay: 1.5,
+        dragDecay: 0.06, 
+        inputSensitivity: 35,
+    };
+
+    // --- AUDIO SYSTEM ---
+    const stopAudio = () => {
+        if (audioRef.current.ctx) {
+            try { audioRef.current.ctx.close(); } catch (e) {}
+            audioRef.current = { ctx: null, oscillator: null, gainNode: null, noiseNode: null, noiseGain: null, filter: null };
+        }
+    };
+
+    const initAudio = () => {
+        if (!audioRef.current.ctx) {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioContext();
+            
+            // Order Sound (Synth)
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sawtooth'; 
+            osc.frequency.value = 60; 
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 100;
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            gain.gain.value = 0;
+
+            // Chaos Sound (Static) - LOW VOLUME
+            const bufferSize = ctx.sampleRate * 2; 
+            const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+            const noise = ctx.createBufferSource();
+            noise.buffer = buffer;
+            noise.loop = true;
+            const noiseGain = ctx.createGain();
+            noise.connect(noiseGain);
+            noiseGain.connect(ctx.destination);
+            noise.start();
+            noiseGain.gain.value = 0.02; // Quiet static
+
+            audioRef.current = { ctx, oscillator: osc, gainNode: gain, noiseNode: noise, noiseGain, filter };
+        } else if (audioRef.current.ctx.state === 'suspended') {
+            audioRef.current.ctx.resume();
+        }
+    };
+
+    const updateAudio = (avg, perk) => {
+        if (audioRef.current.ctx) {
+            const { oscillator, gainNode, filter, ctx } = audioRef.current;
+            const normalized = avg / 100;
+
+            // Pitch effect
+            let targetFreq = 60 + (normalized * normalized * 400); 
+            if (perk === 'HODL') targetFreq = 600; // High freeze tone
+            if (perk === 'LEVERAGE') targetFreq = 40; // Low bass rumble
+
+            oscillator.frequency.setTargetAtTime(targetFreq, ctx.currentTime, 0.1);
+
+            const targetFilter = 100 + (normalized * 5000);
+            filter.frequency.setTargetAtTime(targetFilter, ctx.currentTime, 0.1);
+
+            const targetVol = avg < 30 ? 0 : normalized * 0.15;
+            gainNode.gain.setTargetAtTime(targetVol, ctx.currentTime, 0.1);
+        }
+    };
+
+    // --- GAME LOGIC ---
     useEffect(() => {
-        SoundEngine.init();
-        SoundEngine.startArenaLoop(); // Start continuous loop
+        const savedScore = localStorage.getItem('w_dominance_highscore');
+        if (savedScore) setHighScore(parseInt(savedScore));
 
-        // Generate Tunnel Rings
-        const rings = Array.from({ length: 40 }).map((_, i) => ({
-            id: i,
-            delay: i * 0.1, 
-            rotation: i * 15
-        }));
-        setTunnelElements(rings);
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        
+        const initGrid = () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            state.current.cols = Math.ceil(canvas.width / config.fontSize);
+            state.current.rows = Math.ceil(canvas.height / config.fontSize);
+            state.current.grid = new Array(state.current.cols * state.current.rows).fill(0);
+        };
+        initGrid();
 
-        // Terminal Typewriter Effect
-        const interval = setInterval(() => {
-            const possibleLines = [
-                "L-RATIO: 0.00%", "ANALYZING MARKET DEPTH...", "SHORT SQUEEZE IMMINENT", 
-                "DIAMOND HANDS DETECTED", "PUMP.JS LOADED", "ERROR: TOO MUCH WINNING",
-                "TARGET: ANDROMEDA GALAXY", "VOLUME: INFINITE"
-            ];
-            const newLine = possibleLines[Math.floor(Math.random() * possibleLines.length)];
-            setTerminalLines(prev => [...prev.slice(-8), newLine]);
-        }, 800);
+        // --- ITEM SPAWNER ---
+        const spawnItem = () => {
+            const types = ['LEVERAGE', 'HODL'];
+            const type = types[Math.floor(Math.random() * types.length)];
+            const isLeft = Math.random() > 0.5;
+            
+            state.current.floatingItem = {
+                x: isLeft ? 0 : canvas.width,
+                y: Math.random() * (canvas.height - 200) + 100,
+                dx: isLeft ? (Math.random() * 5 + 3) : -(Math.random() * 5 + 3), 
+                dy: (Math.random() - 0.5) * 4, 
+                type: type,
+                trail: [] 
+            };
+        };
+
+        // --- INPUTS ---
+        const updatePointer = (id, x, y) => {
+            const prev = state.current.pointers.get(id);
+            let velocity = 0;
+            if (prev) {
+                const dx = x - prev.x;
+                const dy = y - prev.y;
+                velocity = Math.sqrt(dx*dx + dy*dy);
+            }
+            state.current.pointers.set(id, { x, y, velocity });
+        };
+
+        const handleStartInteraction = () => {
+            if (!state.current.hasStarted && gameState === 'IDLE') {
+                state.current.hasStarted = true;
+                setGameState('ACTIVE');
+                initAudio();
+            }
+        };
+
+        const handleInputMove = (x, y) => { if (state.current.pointers.has('mouse')) updatePointer('mouse', x, y); };
+        const onMouseDown = (e) => { handleStartInteraction(); updatePointer('mouse', e.clientX, e.clientY); };
+        const onMouseMove = (e) => handleInputMove(e.clientX, e.clientY);
+        const onMouseUp = () => state.current.pointers.delete('mouse');
+        const onTouchStart = (e) => {
+            e.preventDefault(); handleStartInteraction();
+            for (let i=0; i<e.touches.length; i++) updatePointer(e.touches[i].identifier, e.touches[i].clientX, e.touches[i].clientY);
+        };
+        const onTouchMove = (e) => {
+            e.preventDefault();
+            const newMap = new Map();
+            for (let i=0; i<e.touches.length; i++) {
+                const t = e.touches[i];
+                const prev = state.current.pointers.get(t.identifier);
+                let v = 0;
+                if(prev) v = Math.sqrt(Math.pow(t.clientX-prev.x, 2) + Math.pow(t.clientY-prev.y, 2));
+                newMap.set(t.identifier, {x: t.clientX, y: t.clientY, velocity: v});
+            }
+            state.current.pointers = newMap;
+        };
+
+        window.addEventListener('mousedown', onMouseDown);
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+        canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+        canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+        canvas.addEventListener('touchend', onTouchStart, { passive: false });
+        window.addEventListener('resize', initGrid);
+
+        // --- RENDER LOOP ---
+        const render = () => {
+            if (gameState === 'GAME_OVER') return;
+
+            state.current.frame++;
+            const { cols, grid, pointers, floatingItem, perkTimer } = state.current;
+
+            // 1. MANAGE ACTIVE PERK
+            if (perkTimer > 0) {
+                state.current.perkTimer--;
+                if (state.current.perkTimer <= 0) setActivePerk(null);
+            }
+
+            // 2. SPAWN LOGIC
+            state.current.nextSpawnTime--;
+            if (state.current.nextSpawnTime <= 0) {
+                spawnItem();
+                state.current.nextSpawnTime = Math.random() * 500 + 400; // Random spawn 7-15 seconds
+            }
+
+            // 3. BACKGROUND & STAGE COLORS
+            // Determine base colors from Score or Perk
+            let bgFill = 'rgba(5, 5, 5, 0.2)';
+            let primaryText = '#ccff00';
+            let secondaryText = '#330000';
+            
+            // Calculate temp avg for color logic
+            let tempTotal = 0;
+            for(let i=0; i<grid.length; i+=50) tempTotal += grid[i];
+            const currentAvg = tempTotal / (grid.length/50);
+
+            if (activePerk === 'HODL') {
+                bgFill = 'rgba(0, 20, 20, 0.1)'; 
+                primaryText = '#00ffff';
+                secondaryText = '#003333';
+            } else if (activePerk === 'LEVERAGE') {
+                bgFill = 'rgba(0, 0, 20, 0.1)';
+                primaryText = '#4444ff';
+                secondaryText = '#000033';
+            } else if (currentAvg >= 90) { // GOD MODE
+                bgFill = 'rgba(204, 255, 0, 0.3)'; // Inverted
+                primaryText = '#000000';
+                secondaryText = '#ffffff';
+            } else if (currentAvg >= 65) {
+                primaryText = '#ffffff';
+            }
+
+            ctx.fillStyle = bgFill;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 4. DRAW FLOATING ITEM
+            if (floatingItem) {
+                floatingItem.x += floatingItem.dx;
+                floatingItem.y += floatingItem.dy;
+                
+                if (state.current.frame % 3 === 0) {
+                    floatingItem.trail.push({x: floatingItem.x, y: floatingItem.y});
+                    if (floatingItem.trail.length > 20) floatingItem.trail.shift();
+                }
+
+                // Collision
+                let caught = false;
+                for (let [id, ptr] of pointers) {
+                    const dist = Math.sqrt(Math.pow(floatingItem.x - ptr.x, 2) + Math.pow(floatingItem.y - ptr.y, 2));
+                    if (dist < 80) caught = true; 
+                }
+
+                if (caught) {
+                    setActivePerk(floatingItem.type);
+                    state.current.perkTimer = 400; 
+                    state.current.floatingItem = null; 
+                } else if (floatingItem.x < -100 || floatingItem.x > canvas.width + 100) {
+                    state.current.floatingItem = null;
+                } else {
+                    // Draw Trail
+                    ctx.fillStyle = floatingItem.type === 'HODL' ? '#00ffff' : '#3333ff';
+                    floatingItem.trail.forEach((t, i) => {
+                        ctx.globalAlpha = i / 20;
+                        ctx.font = '20px monospace';
+                        ctx.fillText(floatingItem.type === 'HODL' ? '❄' : '▲', t.x, t.y);
+                    });
+                    ctx.globalAlpha = 1.0;
+                    ctx.font = '40px monospace';
+                    ctx.fillText(floatingItem.type === 'HODL' ? '[❄]' : '[▲]', floatingItem.x, floatingItem.y);
+                }
+            }
+
+            // 5. GRID PHYSICS
+            ctx.font = `bold ${config.fontSize}px monospace`;
+            ctx.textBaseline = 'top';
+            
+            let totalEnergy = 0;
+
+            // Physics Modifiers
+            let currentDecay = config.baseDecay;
+            let currentRadius = 100;
+            let currentSensitivity = config.inputSensitivity;
+
+            if (activePerk === 'HODL') {
+                currentDecay = 0; // FREEZE
+            } 
+            if (activePerk === 'LEVERAGE') {
+                currentRadius = 300; 
+                currentSensitivity = 100; 
+            } else {
+                 if (activePerk !== 'HODL') currentDecay += (currentAvg * config.dragDecay);
+            }
+
+            for (let i = 0; i < grid.length; i++) {
+                const x = (i % cols) * config.fontSize;
+                const y = Math.floor(i / cols) * config.fontSize;
+
+                let inputImpact = 0;
+                for (let [id, ptr] of pointers) {
+                    const dist = Math.sqrt(Math.pow(x - ptr.x, 2) + Math.pow(y - ptr.y, 2));
+                    if (dist < currentRadius) {
+                        const vMult = Math.min(ptr.velocity, 40) / 4; 
+                        const impactCalc = ((currentRadius - dist) / currentRadius);
+                        inputImpact += impactCalc * (currentSensitivity + vMult);
+                    }
+                }
+
+                grid[i] = Math.min(100, Math.max(0, grid[i] + inputImpact - currentDecay));
+                totalEnergy += grid[i];
+                
+                // RENDERING
+                const g = grid[i];
+                if (g > 30) {
+                    ctx.fillStyle = primaryText;
+                    // God Mode Glitch
+                    if (currentAvg >= 90 && activePerk === null && Math.random() > 0.8) ctx.fillStyle = '#ffffff';
+                    
+                    const char = (g >= 90) ? "W" : (Math.random() > 0.9 ? "$" : "W");
+                    ctx.fillText(char, x, y);
+                } else {
+                     if (Math.random() > 0.6) {
+                        ctx.fillStyle = secondaryText;
+                        const char = Math.random() > 0.5 ? "L" : ".";
+                        ctx.fillText(char, x, y);
+                    }
+                }
+            }
+
+            // 6. UI & LOGIC
+            const avg = Math.floor(totalEnergy / grid.length);
+            
+            if (state.current.frame % 4 === 0) {
+                setDominance(avg);
+                updateAudio(avg, activePerk);
+
+                // Stage Logic
+                if (avg >= 90) setCurrentStage("GOD MODE");
+                else if (avg >= 65) setCurrentStage("VOLATILITY");
+                else if (avg >= 50) setCurrentStage("MOMENTUM");
+                else if (avg >= 30) setCurrentStage("AWAKENING");
+                else setCurrentStage("VOID");
+
+                if (state.current.hasStarted && avg <= 0) {
+                    setGameState('GAME_OVER');
+                    stopAudio();
+                }
+
+                if (avg > state.current.sessionHigh) {
+                    state.current.sessionHigh = avg;
+                    if (avg > parseInt(localStorage.getItem('w_dominance_highscore') || '0')) {
+                        localStorage.setItem('w_dominance_highscore', avg.toString());
+                        setHighScore(avg);
+                    }
+                }
+            }
+
+            requestRef.current = requestAnimationFrame(render);
+        };
+        requestRef.current = requestAnimationFrame(render);
 
         return () => {
-            clearInterval(interval);
-            SoundEngine.stopArenaLoop(); // Kill sound on unmount/exit
+            window.removeEventListener('mousedown', onMouseDown);
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+            window.removeEventListener('resize', initGrid);
+            canvas.removeEventListener('touchstart', onTouchStart);
+            canvas.removeEventListener('touchmove', onTouchMove);
+            canvas.removeEventListener('touchend', onTouchStart);
+            if (requestRef.current) cancelAnimationFrame(requestRef.current);
+            stopAudio();
         };
-    }, []);
+    }, [gameState, activePerk]);
+
+    const handleRetry = () => {
+        state.current.sessionHigh = 0;
+        state.current.hasStarted = false; 
+        state.current.grid.fill(0);
+        state.current.nextSpawnTime = 100;
+        state.current.floatingItem = null;
+        state.current.perkTimer = 0;
+        setDominance(0);
+        setActivePerk(null);
+        setGameState('IDLE');
+        setCurrentStage("VOID");
+    };
 
     return (
-        <div className="fixed inset-0 z-[10000] bg-black arena-container cursor-none">
+        <div className="fixed inset-0 z-[10000] bg-black cursor-crosshair overflow-hidden font-mono select-none">
             
-            {/* 3D TUNNEL */}
-            {tunnelElements.map(el => (
-                <div 
-                    key={el.id} 
-                    className="tunnel-w text-9xl font-black"
-                    style={{ 
-                        animation: `tunnel-move 4s linear infinite`,
-                        animationDelay: `${el.delay}s`,
-                        transform: `rotate(${el.rotation}deg)` // Initial offset
-                    }}
-                >
-                    W
-                </div>
-            ))}
+            <canvas ref={canvasRef} className={`absolute inset-0 block w-full h-full touch-none transition-opacity duration-1000 ${gameState === 'GAME_OVER' ? 'opacity-20' : 'opacity-100'}`} />
 
-            {/* EXIT BUTTON (FIXED TOP RIGHT) */}
-            <button 
-                onClick={onExit}
-                // Removed onMouseEnter hover sound
-                className="absolute top-8 right-8 z-50 border-2 border-red-500 bg-black text-red-500 hover:bg-red-500 hover:text-black px-6 py-2 font-mono font-bold tracking-widest uppercase transition-all flex items-center gap-2 cursor-pointer"
-            >
-                <Power size={18} /> EJECT
-            </button>
-
-            {/* TERMINAL OVERLAY */}
-            <div className="absolute bottom-8 left-8 z-50 font-mono text-xs md:text-sm text-[var(--accent)] opacity-80 pointer-events-none bg-black/80 p-4 border-l-2 border-[var(--accent)]">
-                <div className="flex items-center gap-2 mb-2 border-b border-neutral-800 pb-2 text-white">
-                    <Terminal size={14} /> CLASSIFIED_FEED
+            {/* HUD */}
+            <div className="absolute top-0 left-0 w-full p-4 md:p-6 flex justify-between items-start z-40 pointer-events-none mix-blend-exclusion text-white">
+                <div className="flex flex-col">
+                    <h1 className="text-4xl md:text-6xl font-black tracking-tighter uppercase leading-none">
+                        ENTROPY<br/>ENGINE
+                    </h1>
+                    <div className="flex items-center gap-2 mt-2">
+                        {activePerk ? (
+                            <span className={`px-2 py-1 text-sm font-black inline-block animate-pulse border-2
+                                ${activePerk === 'HODL' ? 'bg-[#00ffff] text-black border-[#00ffff]' : 'bg-[#3333ff] text-white border-white'}`}>
+                                {activePerk === 'HODL' ? '❄ SYSTEM FROZEN ❄' : '▲ LEVERAGE ACTIVE ▲'}
+                            </span>
+                        ) : (
+                            <span className={`px-2 py-1 text-xs font-bold inline-block animate-pulse 
+                                ${currentStage === 'GOD MODE' ? 'bg-black text-[#ccff00] border border-[#ccff00]' : 'bg-[#ccff00] text-black'}`}>
+                                {gameState === 'IDLE' ? 'TOUCH TO START' : `ZONE: ${currentStage}`}
+                            </span>
+                        )}
+                    </div>
                 </div>
-                {terminalLines.map((line, i) => (
-                    <div key={i} className="mb-1">{'>'} {line}</div>
-                ))}
-                <div className="animate-pulse">_</div>
+
+                <div className="text-right">
+                    <div className="text-[10px] uppercase tracking-widest mb-1 opacity-70">Buying Pressure</div>
+                    <div className={`text-6xl font-black tabular-nums transition-colors duration-300
+                        ${activePerk === 'HODL' ? 'text-[#00ffff]' : activePerk === 'LEVERAGE' ? 'text-[#5555ff]' : currentStage === 'GOD MODE' ? 'text-white' : 'text-[#ccff00]'}`}>
+                        {dominance}%
+                    </div>
+                    <div className="text-xs text-white/50">Rec: {highScore}%</div>
+                </div>
             </div>
 
-            {/* CENTER FLAVOR TEXT */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <h1 className="text-white font-black text-6xl md:text-8xl mix-blend-difference animate-pulse text-center">
-                    REALITY<br/><span className="text-[var(--accent)]">BREACHED</span>
-                </h1>
-            </div>
+            {/* GAME OVER SCREEN */}
+            {gameState === 'GAME_OVER' && (
+                <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-black/80 backdrop-blur-md">
+                    <div className="border-2 border-red-600 p-8 md:p-12 bg-black text-center max-w-lg w-full relative overflow-hidden shadow-[0_0_100px_rgba(255,0,0,0.3)] animate-in fade-in zoom-in duration-300">
+                        <div className="absolute top-0 left-0 w-full h-1 bg-red-600 animate-pulse"></div>
+                        <h2 className="text-red-600 text-4xl md:text-5xl font-black uppercase mb-2 tracking-tighter">LIQUIDATED</h2>
+                        <p className="text-white/50 text-xs font-mono mb-8 uppercase tracking-widest">Momentum Reached Zero</p>
+
+                        <div className="grid grid-cols-2 gap-4 mb-8">
+                            <div className="bg-white/5 p-4 border-l-2 border-red-600">
+                                <div className="text-red-600 text-xs uppercase mb-1">Session Peak</div>
+                                <div className="text-white text-4xl font-black">{state.current.sessionHigh}%</div>
+                            </div>
+                            <div className="bg-white/5 p-4 border border-white/10">
+                                <div className="text-white/50 text-xs uppercase mb-1">All-Time High</div>
+                                <div className="text-white text-4xl font-black">{highScore}%</div>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col gap-3 justify-center">
+                            <button onClick={handleRetry} className="w-full bg-white text-black px-6 py-4 font-black uppercase text-xl hover:bg-[#ccff00] transition-colors skew-x-[-10deg]">
+                                Re-Enter Arena
+                            </button>
+                            <button onClick={onExit} className="w-full text-white/50 px-6 py-2 font-mono text-xs uppercase hover:text-white transition-colors">
+                                Accept Defeat
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
