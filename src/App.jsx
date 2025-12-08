@@ -79,14 +79,21 @@ const GlobalStyles = () => (
       --dot-color: #3f3f46;
     }
 
+    * {
+      -webkit-tap-highlight-color: transparent;
+      outline: none;
+    }
+
     body {
       background-color: var(--bg-color);
       color: var(--text-color);
       overflow: hidden;
       font-family: 'Kalam', cursive;
       transition: background-color 0.3s ease, color 0.3s ease;
-      overscroll-behavior: none; /* Prevent bounce on mobile */
-      touch-action: none; /* Prevent browser zooming/scrolling */
+      overscroll-behavior: none;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
 
     /* Hand Drawn Box Utility */
@@ -214,7 +221,7 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
   const canvasRef = useRef(null);
   const [drag, setDrag] = useState({ active: false, type: null, start: {x:0,y:0}, noteId: null });
   const [hoveredNote, setHoveredNote] = useState(null);
-  const [mousePos, setMousePos] = useState({ x: -9999, y: -9999 }); // Track for dot interaction
+  const [mousePos, setMousePos] = useState({ x: -9999, y: -9999 }); 
   const imageCache = useRef(new Map());
   const templateImg = useRef(null);
   
@@ -300,7 +307,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
         }
 
         ctx.beginPath();
-        // Reduced dot size from 2 to 1.2
         ctx.arc(finalX, finalY, 1.2 / view.scale, 0, Math.PI * 2);
         ctx.fill();
       }
@@ -335,8 +341,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
 
     // 3. Template Image (Superman with Mic)
     if (templateImg.current) {
-      // Draw image in top section
-      // Maintain aspect ratio cover or fit
       ctx.save();
       ctx.beginPath();
       // Clip top area
@@ -353,7 +357,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     ctx.translate(-width/2 + 20, -totalHeight/2 + HEADER_HEIGHT + 20);
     
     if (note.type === 'draw') {
-        // Draw Drawing
         if (imageCache.current.has(note.id)) {
             const img = imageCache.current.get(note.id);
             if(darkMode) {
@@ -370,13 +373,21 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
             };
         }
     } else {
-        // Draw Text
         ctx.fillStyle = note.style?.color || (darkMode ? '#fff' : '#000');
         ctx.font = '24px "Permanent Marker"';
         wrapText(ctx, note.content, 0, 0, width - 40, 30);
     }
 
-    // 5. Signature (Improved Visibility)
+    // 5. Selection Highlight (DRAWN BEFORE BADGE)
+    if (isHovered || isOwner) {
+        ctx.strokeStyle = isOwner ? '#ff4757' : '#2ed573';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(-20, -30, width, CONTENT_HEIGHT + 10);
+        ctx.setLineDash([]); // Reset dash for next draws
+    }
+
+    // 6. Signature (DRAWN LAST TO COVER BORDER)
     const authorName = note.author ? `@${note.author}` : '@Anon';
     ctx.font = 'bold 12px "JetBrains Mono"';
     const textMetrics = ctx.measureText(authorName);
@@ -386,11 +397,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     // Badge Background (Solid Pill)
     ctx.fillStyle = darkMode ? '#27272a' : '#f4f4f5';
     ctx.beginPath();
-    // Position at bottom right
-    const badgeX = width/2 - badgeWidth - 20; // relative to translated center (which is -width/2 + 20)
-    // Actually we are translated to top-left of content area.
-    // Content width is (width-40).
-    // Let's position bottom right of content area.
     ctx.roundRect(width - 40 - badgeWidth, CONTENT_HEIGHT - 35, badgeWidth, badgeHeight, 12);
     ctx.fill();
     ctx.strokeStyle = darkMode ? '#52525b' : '#d4d4d8';
@@ -406,15 +412,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     // Reset baselines
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-
-
-    // 6. Selection Highlight
-    if (isHovered || isOwner) {
-        ctx.strokeStyle = isOwner ? '#ff4757' : '#2ed573';
-        ctx.lineWidth = 3;
-        ctx.setLineDash([5, 5]);
-        ctx.strokeRect(-20, -30, width, CONTENT_HEIGHT + 10);
-    }
 
     ctx.restore();
   };
@@ -444,7 +441,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
   });
 
   const handlePointerDown = (e) => {
-    // If multiple touches, handle pinch in touchMove, ignore drag here for now or init pinch
     if (e.touches && e.touches.length === 2) {
         const t1 = e.touches[0];
         const t2 = e.touches[1];
@@ -461,11 +457,9 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     const my = clientY - rect.top;
     const worldPos = toWorld(mx, my);
 
-    // Hit Test
     const hit = [...notes].reverse().find(n => {
-        // Approx height based on type
         const h = n.type === 'draw' ? 220 : Math.max(120, (n.content.length / 1.4) + 60);
-        const totalH = 200 + h; // + Header
+        const totalH = 200 + h;
         return Math.abs(worldPos.x - n.x) < NOTE_WIDTH/2 && Math.abs(worldPos.y - n.y) < totalH/2;
     });
 
@@ -477,7 +471,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
   };
 
   const handlePointerMove = (e) => {
-    // Handle Pinch
     if (e.touches && e.touches.length === 2) {
         if (!pinchRef.current.active) return;
         const t1 = e.touches[0];
@@ -487,22 +480,12 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
         if (pinchRef.current.startDist > 0) {
             const scaleFactor = dist / pinchRef.current.startDist;
             const newScale = Math.min(Math.max(pinchRef.current.startScale * scaleFactor, 0.1), 4);
-            
-            // Midpoint
             const rect = canvasRef.current.getBoundingClientRect();
             const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
             const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
-
-            // Zoom around midpoint logic:
-            // World point at midpoint should remain constant
             const wx = (midX - view.x) / view.scale;
             const wy = (midY - view.y) / view.scale;
-            
-            setView({
-                scale: newScale,
-                x: midX - wx * newScale,
-                y: midY - wy * newScale
-            });
+            setView({ scale: newScale, x: midX - wx * newScale, y: midY - wy * newScale });
         }
         return;
     }
@@ -513,7 +496,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
 
-    // Update Mouse Pos for Dot Effect
     setMousePos({ x: mx + view.x, y: my + view.y }); 
 
     if (!drag.active) return;
@@ -535,11 +517,9 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
   };
 
   const handlePointerUp = async (e) => {
-    // Reset Pinch if touches drop below 2
     if (e.touches && e.touches.length < 2) {
         pinchRef.current = { active: false, startDist: 0, startScale: 1 };
     }
-
     if (drag.type === 'note') {
         const n = notes.find(n => n.id === drag.noteId);
         if (n) await updateDoc(doc(db, "notes", drag.noteId), { x: n.x, y: n.y });
@@ -547,23 +527,11 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     setDrag({ active: false, type: null, start: {x:0,y:0}, noteId: null });
   };
 
-  // Mouse Events
-  const onMouseDown = (e) => {
-    e.preventDefault(); // Prevent text selection highlight
-    handlePointerDown(e);
-  };
+  const onMouseDown = (e) => { e.preventDefault(); handlePointerDown(e); };
   const onMouseMove = (e) => handlePointerMove(e);
   const onMouseUp = (e) => handlePointerUp(e);
-
-  // Touch Events
-  const onTouchStart = (e) => {
-    e.preventDefault(); // Stop scroll & selection
-    handlePointerDown(e);
-  };
-  const onTouchMove = (e) => {
-    // e.preventDefault(); // handled in start
-    handlePointerMove(e);
-  };
+  const onTouchStart = (e) => { e.preventDefault(); handlePointerDown(e); };
+  const onTouchMove = (e) => { handlePointerMove(e); };
   const onTouchEnd = (e) => handlePointerUp(e);
 
   const handleWheel = (e) => {
@@ -571,19 +539,12 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     e.preventDefault();
     const scaleAmount = -e.deltaY * 0.001;
     const newScale = Math.min(Math.max(view.scale + scaleAmount * view.scale, 0.1), 4);
-    
     const rect = canvasRef.current.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
-    
     const worldX = (mouseX - view.x) / view.scale;
     const worldY = (mouseY - view.y) / view.scale;
-    
-    setView({
-      scale: newScale,
-      x: mouseX - worldX * newScale,
-      y: mouseY - worldY * newScale
-    });
+    setView({ scale: newScale, x: mouseX - worldX * newScale, y: mouseY - worldY * newScale });
   };
 
   return (
@@ -722,7 +683,7 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
   };
 
   const startDraw = (e) => {
-    e.preventDefault(); // Stop scrolling
+    // e.preventDefault();
     isDrawing.current = true;
     const {x, y} = getCoords(e);
     const ctx = canvasRef.current.getContext('2d');
@@ -735,7 +696,7 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
   };
   
   const moveDraw = (e) => {
-    e.preventDefault(); // Stop scrolling
+    // e.preventDefault();
     if (!isDrawing.current) return;
     const {x, y} = getCoords(e);
     const ctx = canvasRef.current.getContext('2d');
@@ -840,10 +801,10 @@ const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode }) => {
     return (
         <div className="pointer-events-none fixed inset-0 z-40 flex flex-col justify-between p-4">
             
-            {/* Top Bar */}
-            <div className="flex justify-between items-start pointer-events-auto">
+            {/* Top Bar (Mobile Optimized) */}
+            <div className="flex flex-col md:flex-row justify-between items-center md:items-start pointer-events-auto gap-4">
                 <div 
-                    className="bg-[#fffbeb] sketchy-box p-3 shadow-lg flex items-center gap-3"
+                    className="bg-[#fffbeb] sketchy-box p-3 shadow-lg flex items-center gap-3 self-start md:self-auto"
                     style={{ backgroundImage: "url('image1.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}
                 >
                     <div className="absolute inset-0 bg-white/70 pointer-events-none"></div>
@@ -858,7 +819,7 @@ const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode }) => {
                     </div>
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 self-end md:self-auto">
                     {/* Socials */}
                     <a href="https://x.com/search?q=SayYourStupidLine" target="_blank" rel="noreferrer" className="bg-black text-white border-2 border-white p-2 rounded-full hover:bg-[#ff4757] transition-colors">
                         <Twitter size={20}/>
@@ -879,7 +840,7 @@ const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode }) => {
                     >
                          <div className="absolute inset-0 bg-white/70 pointer-events-none"></div>
                          <div className="relative z-10 flex items-center gap-2">
-                            <span className="font-bold">{user.displayName}</span>
+                            <span className="font-bold hidden md:inline">{user.displayName}</span>
                             <button onClick={()=>signOut(auth)}><LogOut size={14} className="text-red-500"/></button>
                          </div>
                     </div>
