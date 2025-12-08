@@ -55,7 +55,7 @@ const db = getFirestore(app);
 // --- GLOBAL STYLES ---
 const GlobalStyles = () => (
   <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Permanent+Marker&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Permanent+Marker&family=JetBrains+Mono:wght@700&display=swap');
     
     :root {
       --bg-color: #fffbeb;
@@ -85,6 +85,8 @@ const GlobalStyles = () => (
       overflow: hidden;
       font-family: 'Kalam', cursive;
       transition: background-color 0.3s ease, color 0.3s ease;
+      overscroll-behavior: none; /* Prevent bounce on mobile */
+      touch-action: none; /* Prevent browser zooming/scrolling */
     }
 
     /* Hand Drawn Box Utility */
@@ -215,6 +217,9 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
   const [mousePos, setMousePos] = useState({ x: -9999, y: -9999 }); // Track for dot interaction
   const imageCache = useRef(new Map());
   const templateImg = useRef(null);
+  
+  // Pinch Zoom State
+  const pinchRef = useRef({ active: false, startDist: 0, startScale: 1 });
 
   // Load Template Once
   useEffect(() => {
@@ -351,8 +356,6 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
         // Draw Drawing
         if (imageCache.current.has(note.id)) {
             const img = imageCache.current.get(note.id);
-            // Invert colors if dark mode for visibility or keep raw? 
-            // Let's keep raw drawing but maybe add a white bg if darkmode
             if(darkMode) {
                 ctx.globalCompositeOperation = 'difference';
             }
@@ -373,11 +376,37 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
         wrapText(ctx, note.content, 0, 0, width - 40, 30);
     }
 
-    // 5. Signature
-    ctx.fillStyle = darkMode ? '#a1a1aa' : 'rgba(0,0,0,0.5)';
-    ctx.font = '14px "Kalam"';
-    ctx.textAlign = 'right';
-    ctx.fillText(note.author ? `@${note.author}` : '@anon', width - 40, CONTENT_HEIGHT - 20);
+    // 5. Signature (Improved Visibility)
+    const authorName = note.author ? `@${note.author}` : '@Anon';
+    ctx.font = 'bold 12px "JetBrains Mono"';
+    const textMetrics = ctx.measureText(authorName);
+    const badgeWidth = textMetrics.width + 16;
+    const badgeHeight = 24;
+    
+    // Badge Background (Solid Pill)
+    ctx.fillStyle = darkMode ? '#27272a' : '#f4f4f5';
+    ctx.beginPath();
+    // Position at bottom right
+    const badgeX = width/2 - badgeWidth - 20; // relative to translated center (which is -width/2 + 20)
+    // Actually we are translated to top-left of content area.
+    // Content width is (width-40).
+    // Let's position bottom right of content area.
+    ctx.roundRect(width - 40 - badgeWidth, CONTENT_HEIGHT - 35, badgeWidth, badgeHeight, 12);
+    ctx.fill();
+    ctx.strokeStyle = darkMode ? '#52525b' : '#d4d4d8';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Badge Text
+    ctx.fillStyle = darkMode ? '#fff' : '#000';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(authorName, width - 40 - badgeWidth/2, CONTENT_HEIGHT - 35 + badgeHeight/2);
+
+    // Reset baselines
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
 
     // 6. Selection Highlight
     if (isHovered || isOwner) {
@@ -415,7 +444,15 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
   });
 
   const handlePointerDown = (e) => {
-    // Standardize event (Touch vs Mouse)
+    // If multiple touches, handle pinch in touchMove, ignore drag here for now or init pinch
+    if (e.touches && e.touches.length === 2) {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        pinchRef.current = { active: true, startDist: dist, startScale: view.scale };
+        return;
+    }
+
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     
@@ -440,6 +477,36 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
   };
 
   const handlePointerMove = (e) => {
+    // Handle Pinch
+    if (e.touches && e.touches.length === 2) {
+        if (!pinchRef.current.active) return;
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        
+        if (pinchRef.current.startDist > 0) {
+            const scaleFactor = dist / pinchRef.current.startDist;
+            const newScale = Math.min(Math.max(pinchRef.current.startScale * scaleFactor, 0.1), 4);
+            
+            // Midpoint
+            const rect = canvasRef.current.getBoundingClientRect();
+            const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
+            const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+
+            // Zoom around midpoint logic:
+            // World point at midpoint should remain constant
+            const wx = (midX - view.x) / view.scale;
+            const wy = (midY - view.y) / view.scale;
+            
+            setView({
+                scale: newScale,
+                x: midX - wx * newScale,
+                y: midY - wy * newScale
+            });
+        }
+        return;
+    }
+
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -447,7 +514,7 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     const my = clientY - rect.top;
 
     // Update Mouse Pos for Dot Effect
-    setMousePos({ x: mx + view.x, y: my + view.y }); // Store world-relative or screen? Screen logic in draw func
+    setMousePos({ x: mx + view.x, y: my + view.y }); 
 
     if (!drag.active) return;
     
@@ -467,7 +534,12 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     }
   };
 
-  const handlePointerUp = async () => {
+  const handlePointerUp = async (e) => {
+    // Reset Pinch if touches drop below 2
+    if (e.touches && e.touches.length < 2) {
+        pinchRef.current = { active: false, startDist: 0, startScale: 1 };
+    }
+
     if (drag.type === 'note') {
         const n = notes.find(n => n.id === drag.noteId);
         if (n) await updateDoc(doc(db, "notes", drag.noteId), { x: n.x, y: n.y });
@@ -475,32 +547,55 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     setDrag({ active: false, type: null, start: {x:0,y:0}, noteId: null });
   };
 
+  // Mouse Events
+  const onMouseDown = (e) => {
+    e.preventDefault(); // Prevent text selection highlight
+    handlePointerDown(e);
+  };
+  const onMouseMove = (e) => handlePointerMove(e);
+  const onMouseUp = (e) => handlePointerUp(e);
+
+  // Touch Events
+  const onTouchStart = (e) => {
+    e.preventDefault(); // Stop scroll & selection
+    handlePointerDown(e);
+  };
+  const onTouchMove = (e) => {
+    // e.preventDefault(); // handled in start
+    handlePointerMove(e);
+  };
+  const onTouchEnd = (e) => handlePointerUp(e);
+
   const handleWheel = (e) => {
-      e.preventDefault();
-      const scaleAmount = -e.deltaY * 0.001;
-      const newScale = Math.min(Math.max(view.scale + scaleAmount * view.scale, 0.1), 4);
-      const rect = canvasRef.current.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const worldX = (mouseX - view.x) / view.scale;
-      const worldY = (mouseY - view.y) / view.scale;
-      setView({
-        scale: newScale,
-        x: mouseX - worldX * newScale,
-        y: mouseY - worldY * newScale
-      });
+    if(e.ctrlKey) return; 
+    e.preventDefault();
+    const scaleAmount = -e.deltaY * 0.001;
+    const newScale = Math.min(Math.max(view.scale + scaleAmount * view.scale, 0.1), 4);
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    const worldX = (mouseX - view.x) / view.scale;
+    const worldY = (mouseY - view.y) / view.scale;
+    
+    setView({
+      scale: newScale,
+      x: mouseX - worldX * newScale,
+      y: mouseY - worldY * newScale
+    });
   };
 
   return (
     <canvas 
       ref={canvasRef}
-      onMouseDown={handlePointerDown}
-      onMouseMove={handlePointerMove}
-      onMouseUp={handlePointerUp}
-      onMouseLeave={handlePointerUp}
-      onTouchStart={handlePointerDown}
-      onTouchMove={handlePointerMove}
-      onTouchEnd={handlePointerUp}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
       onWheel={handleWheel}
       className="absolute inset-0 w-full h-full block touch-none cursor-crosshair"
     />
@@ -627,7 +722,7 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
   };
 
   const startDraw = (e) => {
-    // e.preventDefault();
+    e.preventDefault(); // Stop scrolling
     isDrawing.current = true;
     const {x, y} = getCoords(e);
     const ctx = canvasRef.current.getContext('2d');
@@ -640,7 +735,7 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
   };
   
   const moveDraw = (e) => {
-    // e.preventDefault();
+    e.preventDefault(); // Stop scrolling
     if (!isDrawing.current) return;
     const {x, y} = getCoords(e);
     const ctx = canvasRef.current.getContext('2d');
@@ -657,7 +752,7 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 font-['Kalam']">
-      <div className="bg-white sketchy-box w-full max-w-lg overflow-hidden relative shadow-2xl rotate-1 text-black">
+      <div className="bg-white sketchy-box w-full max-w-lg overflow-hidden relative shadow-2xl text-black">
         <div className="bg-[#2ed573] border-b-2 border-black p-4 flex justify-between items-center">
           <h2 className="text-2xl font-bold font-['Permanent_Marker']">NEW STUPID THING</h2>
           <button onClick={onClose} className="bg-white border-2 border-black rounded-full p-1 hover:bg-red-200 transition-colors"><X/></button>
@@ -689,6 +784,7 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
                     width={460}
                     height={160}
                     className="w-full h-full cursor-crosshair touch-none"
+                    style={{ touchAction: 'none' }} // Ensure no gestures
                     onMouseDown={startDraw}
                     onMouseMove={moveDraw}
                     onMouseUp={endDraw}
@@ -704,7 +800,7 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
                     <button onClick={() => {
                         const ctx = canvasRef.current.getContext('2d');
                         ctx.clearRect(0,0,460,260);
-                        saveState();
+                        saveHistory();
                     }} className="p-2 bg-white border-2 border-black rounded-lg hover:bg-red-100 text-red-500 shadow-sm">
                         <Trash2 size={20}/>
                     </button>
