@@ -32,7 +32,8 @@ import {
   Moon,
   Sun,
   MousePointer2,
-  Twitter
+  Twitter,
+  Menu
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -81,7 +82,7 @@ const GlobalStyles = () => (
 
     * {
       -webkit-tap-highlight-color: transparent;
-      outline: none;
+      outline: none !important;
     }
 
     body {
@@ -94,6 +95,12 @@ const GlobalStyles = () => (
       touch-action: none;
       user-select: none;
       -webkit-user-select: none;
+      opacity: 1 !important; /* Force opacity */
+    }
+
+    canvas {
+      opacity: 1 !important;
+      -webkit-touch-callout: none;
     }
 
     /* Hand Drawn Box Utility */
@@ -378,7 +385,7 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
         wrapText(ctx, note.content, 0, 0, width - 40, 30);
     }
 
-    // 5. Selection Highlight (DRAWN BEFORE BADGE)
+    // 5. Selection Highlight (DRAWN BEFORE BADGE - CONFIRMED)
     if (isHovered || isOwner) {
         ctx.strokeStyle = isOwner ? '#ff4757' : '#2ed573';
         ctx.lineWidth = 3;
@@ -397,6 +404,7 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     // Badge Background (Solid Pill)
     ctx.fillStyle = darkMode ? '#27272a' : '#f4f4f5';
     ctx.beginPath();
+    // Position at bottom right
     ctx.roundRect(width - 40 - badgeWidth, CONTENT_HEIGHT - 35, badgeWidth, badgeHeight, 12);
     ctx.fill();
     ctx.strokeStyle = darkMode ? '#52525b' : '#d4d4d8';
@@ -798,13 +806,29 @@ const CreationStudio = ({ onClose, user, view, darkMode }) => {
 
 // --- HUD ---
 const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode }) => {
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+    // Common Social/Action Buttons
+    const SocialActions = () => (
+        <>
+            <a href="https://x.com/search?q=SayYourStupidLine" target="_blank" rel="noreferrer" className="bg-black text-white border-2 border-white p-2 rounded-full hover:bg-[#ff4757] transition-colors flex items-center justify-center">
+                <Twitter size={20}/>
+            </a>
+            <a href="https://www.tiktok.com/search?q=SayYourStupidLine" target="_blank" rel="noreferrer" className="bg-black text-white border-2 border-white p-2 rounded-full hover:bg-[#ff4757] transition-colors flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/>
+                </svg>
+            </a>
+        </>
+    );
+
     return (
         <div className="pointer-events-none fixed inset-0 z-40 flex flex-col justify-between p-4">
             
-            {/* Top Bar (Mobile Optimized) */}
-            <div className="flex flex-col md:flex-row justify-between items-center md:items-start pointer-events-auto gap-4">
+            {/* Top Bar */}
+            <div className="flex justify-between items-start pointer-events-auto">
                 <div 
-                    className="bg-[#fffbeb] sketchy-box p-3 shadow-lg flex items-center gap-3 self-start md:self-auto"
+                    className="bg-[#fffbeb] sketchy-box p-3 shadow-lg flex items-center gap-3"
                     style={{ backgroundImage: "url('image1.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}
                 >
                     <div className="absolute inset-0 bg-white/70 pointer-events-none"></div>
@@ -819,18 +843,9 @@ const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode }) => {
                     </div>
                 </div>
 
-                <div className="flex gap-2 self-end md:self-auto">
-                    {/* Socials */}
-                    <a href="https://x.com/search?q=SayYourStupidLine" target="_blank" rel="noreferrer" className="bg-black text-white border-2 border-white p-2 rounded-full hover:bg-[#ff4757] transition-colors">
-                        <Twitter size={20}/>
-                    </a>
-                    {/* TikTok - Using SVG */}
-                    <a href="https://www.tiktok.com/search?q=SayYourStupidLine" target="_blank" rel="noreferrer" className="bg-black text-white border-2 border-white p-2 rounded-full hover:bg-[#ff4757] transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                            <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/>
-                        </svg>
-                    </a>
-
+                {/* DESKTOP MENU (Hidden on Mobile) */}
+                <div className="hidden md:flex gap-2">
+                    <SocialActions />
                     <button onClick={()=>setDarkMode(!darkMode)} className="bg-white border-2 border-black p-2 rounded-full hover:bg-gray-100 transition-colors text-black">
                         {darkMode ? <Sun size={20}/> : <Moon size={20}/>}
                     </button>
@@ -840,12 +855,73 @@ const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode }) => {
                     >
                          <div className="absolute inset-0 bg-white/70 pointer-events-none"></div>
                          <div className="relative z-10 flex items-center gap-2">
-                            <span className="font-bold hidden md:inline">{user.displayName}</span>
+                            <span className="font-bold">{user.displayName}</span>
                             <button onClick={()=>signOut(auth)}><LogOut size={14} className="text-red-500"/></button>
                          </div>
                     </div>
                 </div>
+
+                {/* MOBILE HAMBURGER (Visible on Mobile) */}
+                <button 
+                    onClick={() => setMobileMenuOpen(true)}
+                    className="md:hidden bg-white border-2 border-black p-2 rounded-lg shadow-[2px_2px_0px_#000] active:translate-y-1 active:shadow-none text-black"
+                >
+                    <Menu size={28} />
+                </button>
             </div>
+
+            {/* MOBILE FULLSCREEN MENU OVERLAY */}
+            {mobileMenuOpen && (
+                <div className="pointer-events-auto fixed inset-0 z-50 flex flex-col items-center justify-center p-8">
+                    {/* Background with Texture */}
+                    <div 
+                        className="absolute inset-0 z-0" 
+                        style={{ backgroundImage: "url('image4.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}
+                    >
+                         <div className="absolute inset-0 bg-white/90 backdrop-blur-sm"></div>
+                    </div>
+                    
+                    <div className="relative z-10 w-full max-w-sm flex flex-col gap-6 text-black text-center">
+                         <button 
+                            onClick={() => setMobileMenuOpen(false)}
+                            className="absolute -top-12 right-0 bg-black text-white p-2 rounded-full hover:bg-red-500 transition-colors"
+                         >
+                            <X size={24}/>
+                         </button>
+
+                         <div className="flex flex-col items-center">
+                            <div className="w-20 h-20 bg-gray-200 rounded-full border-4 border-black mb-4 flex items-center justify-center overflow-hidden">
+                                <Smile size={40} className="text-gray-400"/>
+                            </div>
+                            <h2 className="text-3xl font-black font-['Permanent_Marker']">{user.displayName}</h2>
+                            <p className="text-sm font-bold text-gray-500">MEMBER ACCESS</p>
+                         </div>
+
+                         <div className="grid grid-cols-2 gap-4 w-full">
+                            <a href="https://www.tiktok.com/search?q=SayYourStupidLine" target="_blank" rel="noreferrer" className="bg-[#ff0050] text-white border-2 border-black p-4 rounded-xl shadow-[4px_4px_0px_#000] font-bold text-lg flex items-center justify-center gap-2 hover:scale-105 transition-transform">
+                                <span className="font-['Permanent_Marker']">TREND</span>
+                            </a>
+                            <a href="https://x.com/search?q=SayYourStupidLine" target="_blank" rel="noreferrer" className="bg-black text-white border-2 border-black p-4 rounded-xl shadow-[4px_4px_0px_#fff] font-bold text-lg flex items-center justify-center gap-2 hover:scale-105 transition-transform">
+                                <Twitter size={24}/>
+                            </a>
+                         </div>
+
+                         <button 
+                            onClick={() => setDarkMode(!darkMode)}
+                            className="bg-white border-2 border-black p-4 rounded-xl shadow-[4px_4px_0px_#000] font-bold text-lg flex items-center justify-center gap-2"
+                         >
+                            {darkMode ? <><Sun/> LIGHT MODE</> : <><Moon/> DARK MODE</>}
+                         </button>
+
+                         <button 
+                            onClick={() => signOut(auth)}
+                            className="bg-red-100 text-red-600 border-2 border-red-500 p-4 rounded-xl font-bold flex items-center justify-center gap-2 mt-4"
+                         >
+                            <LogOut/> LOGOUT
+                         </button>
+                    </div>
+                </div>
+            )}
 
             {/* Bottom Bar */}
             <div className="pointer-events-auto flex items-end justify-center gap-4 pb-12">
