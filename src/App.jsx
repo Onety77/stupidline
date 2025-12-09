@@ -39,7 +39,7 @@ const APP_CONSTANTS = {
   TICKER: "SUPERMAN",
   NOTE_WIDTH: 280,
   GRID_SIZE: 50,
-  CONNECTION_RADIUS: 150
+  CONNECTION_RADIUS: 100 // Reduced radius for subtler feel
 };
 
 // Initialize Firebase
@@ -353,11 +353,10 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     requestRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(requestRef.current);
   }, [render]);
-
-  // --- GRID PHYSICS LOGIC ---
+  // --- GRID PHYSICS LOGIC (SUBTLE VERSION) ---
   const renderInteractiveGrid = (ctx, vx, vy, scale, width, height, mouse, isDark) => {
     const dotBaseColor = isDark ? 'rgba(82, 82, 91, 0.5)' : 'rgba(189, 195, 199, 0.5)';
-    const dotActiveColor = '#ff4757';
+    // const dotActiveColor = '#ff4757'; // Removed active color
     
     const gridSize = APP_CONSTANTS.GRID_SIZE * scale;
     // Scale the interaction radius so it affects same visual area regardless of zoom
@@ -383,20 +382,18 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
         let color = dotBaseColor;
 
         if (dist < radius) {
-          // Magnetic Attraction (Surprise 1)
+          // Magnetic Attraction (Ultra Subtle)
           const force = (radius - dist) / radius; // 0 to 1
-          drawX += dx * force * 0.2;
-          drawY += dy * force * 0.2;
-          dotSize = 2 + (force * 1.5);
-          color = dotActiveColor;
           
-          // Connection Line (Surprise 2)
-          ctx.beginPath();
-          ctx.moveTo(drawX, drawY);
-          ctx.lineTo(mouse.x, mouse.y);
-          ctx.strokeStyle = isDark ? `rgba(255, 71, 87, ${force * 0.4})` : `rgba(255, 71, 87, ${force * 0.3})`;
-          ctx.lineWidth = force * 2;
-          ctx.stroke();
+          // Barely move the dot towards the cursor (0.1 factor instead of 0.4)
+          drawX += dx * force * 0.1;
+          drawY += dy * force * 0.1;
+          
+          // Slight size increase
+          dotSize = 2 + (force * 1.5);
+          
+          // REMOVED: color change logic
+          // color = dotActiveColor; 
         }
 
         ctx.fillStyle = color;
@@ -1040,10 +1037,10 @@ const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode, notes =
                     <h2 className="text-3xl font-black dark:text-white">{user.displayName}</h2>
                     <div className="h-px bg-gray-200 dark:bg-zinc-800 w-full my-4"></div>
                     <div className="grid grid-cols-2 gap-4">
-                      <a href="https://www.tiktok.com/search?q=SayYourStupidLine" target="_blank" className="p-4 bg-black text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2">
+                      <a href="https://www.tiktok.com/music/original-sound-7527600299981867798?is_from_webapp=1&sender_device=pc" target="_blank" className="p-4 bg-black text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2">
                         <TikTokIcon size={24}/> TIKTOK
                       </a>
-                      <a href="https://x.com/search?q=SayYourStupidLine" target="_blank" className="p-4 bg-blue-400 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2">
+                      <a href="https://x.com/saystupidline" target="_blank" className="p-4 bg-blue-400 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2">
                         <Twitter size={24}/> TWITTER
                       </a>
                     </div>
