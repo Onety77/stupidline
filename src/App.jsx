@@ -785,7 +785,7 @@ const AuthScreen = ({ onLogin, darkMode }) => {
               disabled={loading}
               className="w-full bg-black text-white p-4 font-bold rounded shadow-[4px_4px_0px_#ff4757] active:shadow-none active:translate-y-1 transition-all disabled:opacity-50 flex justify-center"
             >
-              {loading ? <Loader2 className="animate-spin"/> : 'ENTER THE VOID'}
+              {loading ? <Loader2 className="animate-spin"/> : 'ENTER'}
             </button>
           </form>
        </div>
