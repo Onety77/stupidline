@@ -353,6 +353,7 @@ const CanvasEngine = ({ notes, user, view, setView, darkMode }) => {
     requestRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(requestRef.current);
   }, [render]);
+
   // --- GRID PHYSICS LOGIC (SUBTLE VERSION) ---
   const renderInteractiveGrid = (ctx, vx, vy, scale, width, height, mouse, isDark) => {
     const dotBaseColor = isDark ? 'rgba(82, 82, 91, 0.5)' : 'rgba(189, 195, 199, 0.5)';
@@ -694,7 +695,6 @@ const wrapText = (ctx, text, x, y, maxWidth, lineHeight) => {
 
 // --- AUTH SCREEN ---
 const AuthScreen = ({ onLogin, darkMode }) => {
-  const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -702,21 +702,40 @@ const AuthScreen = ({ onLogin, darkMode }) => {
 
   const handleAuth = async (e) => {
     e.preventDefault();
-    if(!username || !password) { toast("Please fill fields", "error"); return; }
+    if(!username || !password) { toast("Fields required.", "error"); return; }
+    
+    // 1. MASTER PASSWORD CHECK
+    // Only "stupid" (case insensitive) is allowed to proceed
+    if (password.toLowerCase() !== 'stupid') {
+      toast("WRONG SECRET WORD", "error");
+      return;
+    }
     
     setLoading(true);
+    // 2. GENERATE CONSISTENT CREDENTIALS
+    // We use the username to create a fake email.
+    // We use the username ITSELF as the firebase password (reversed for tiny obfuscation) 
+    // to ensure unique login per user, but accessible by "stupid" logic
     const email = `${username.toLowerCase().replace(/\s/g, '')}@stupidline.com`;
-    
+    const firebasePassword = `secret_${username.toLowerCase()}`; 
+
     try {
-      if(isLogin) {
-        await signInWithEmailAndPassword(auth, email, password);
-      } else {
-        const c = await createUserWithEmailAndPassword(auth, email, password);
-        await updateProfile(c.user, { displayName: username });
-      }
-      toast("Welcome!", "success");
+      // 3. TRY TO LOGIN
+      await signInWithEmailAndPassword(auth, email, firebasePassword);
+      toast("Welcome back!", "success");
     } catch (err) {
-      toast(err.message.replace('Firebase:', ''), "error");
+      // 4. IF USER NOT FOUND -> AUTO CREATE
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+         try {
+           const c = await createUserWithEmailAndPassword(auth, email, firebasePassword);
+           await updateProfile(c.user, { displayName: username });
+           toast("Welcome, new stupid!", "success");
+         } catch (createErr) {
+            toast("Error creating identity.", "error");
+         }
+      } else {
+        toast("Auth failed.", "error");
+      }
     } finally {
       setLoading(false);
     }
@@ -746,7 +765,7 @@ const AuthScreen = ({ onLogin, darkMode }) => {
             <div className="group">
               <input 
                 type="text" 
-                placeholder="Who is this?" 
+                placeholder="Pick a Username" 
                 className="w-full bg-gray-50 dark:bg-zinc-800 border-2 border-black dark:border-gray-600 p-4 font-bold rounded focus:border-[#ff4757] transition-colors" 
                 value={username} 
                 onChange={e=>setUsername(e.target.value)} 
@@ -755,23 +774,20 @@ const AuthScreen = ({ onLogin, darkMode }) => {
             <div className="group">
               <input 
                 type="password" 
-                placeholder="password" 
+                placeholder="The Secret Word" 
                 className="w-full bg-gray-50 dark:bg-zinc-800 border-2 border-black dark:border-gray-600 p-4 font-bold rounded focus:border-[#ff4757] transition-colors" 
                 value={password} 
                 onChange={e=>setPassword(e.target.value)} 
               />
+              <p className="text-xs text-center mt-2 text-gray-400">Hint: It's "stupid"</p>
             </div>
             <button 
               disabled={loading}
               className="w-full bg-black text-white p-4 font-bold rounded shadow-[4px_4px_0px_#ff4757] active:shadow-none active:translate-y-1 transition-all disabled:opacity-50 flex justify-center"
             >
-              {loading ? <Loader2 className="animate-spin"/> : (isLogin ? 'ENTER THE VOID' : 'JOIN THE CULT')}
+              {loading ? <Loader2 className="animate-spin"/> : 'ENTER THE VOID'}
             </button>
           </form>
-
-          <button onClick={()=>setIsLogin(!isLogin)} className="block w-full text-center mt-6 text-sm text-gray-500 underline decoration-wavy hover:text-[#ff4757] transition-colors relative z-10">
-              {isLogin ? "Need an identity? Sign up" : "Have an identity? Login"}
-          </button>
        </div>
     </div>
   );
@@ -1042,23 +1058,37 @@ const HUD = ({ user, view, setView, toggleCreate, darkMode, setDarkMode, notes =
 
             {/* Mobile Menu */}
             {mobileMenuOpen && (
-              <div className="pointer-events-auto fixed inset-0 z-50 bg-white/95 dark:bg-black/95 backdrop-blur-xl p-8 flex flex-col animate-in slide-in-from-right duration-200">
-                 <button onClick={() => setMobileMenuOpen(false)} className="self-end p-2 bg-gray-100 dark:bg-zinc-800 rounded-full mb-8"><X/></button>
-                 <div className="flex flex-col gap-4 text-center">
-                    <h2 className="text-3xl font-black dark:text-white">{user.displayName}</h2>
-                    <div className="h-px bg-gray-200 dark:bg-zinc-800 w-full my-4"></div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <a href="https://www.tiktok.com/music/original-sound-7527600299981867798?is_from_webapp=1&sender_device=pc" target="_blank" className="p-4 bg-black text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2">
-                        <TikTokIcon size={24}/> TIKTOK
-                      </a>
-                      <a href="https://x.com/saystupidline" target="_blank" className="p-4 bg-blue-400 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2">
-                        <Twitter size={24}/> TWITTER
-                      </a>
+              <div 
+                  className="pointer-events-auto fixed inset-0 z-50 bg-cover bg-center p-8 flex flex-col animate-in slide-in-from-right duration-200"
+                  style={{ backgroundImage: "url('menubg.jpg')" }}
+              >
+                 {/* Dark Overlay for readability */}
+                 <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-0"></div>
+                 
+                 <div className="relative z-10 w-full h-full flex flex-col">
+                    <button onClick={() => setMobileMenuOpen(false)} className="self-end p-2 bg-white/20 hover:bg-white/30 text-white rounded-full mb-8"><X/></button>
+                    
+                    <div className="flex flex-col gap-4 text-center mt-auto mb-auto">
+                        <h2 className="text-4xl font-black text-white drop-shadow-lg font-['Permanent_Marker']">{user.displayName}</h2>
+                        <div className="h-px bg-white/20 w-full my-4"></div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                        <a href="https://www.tiktok.com/music/original-sound-7527600299981867798?is_from_webapp=1&sender_device=pc" target="_blank" className="p-4 bg-black/50 border border-white/20 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 hover:bg-black/70 backdrop-blur-md">
+                            <TikTokIcon size={24}/> TREND
+                        </a>
+                        <a href="https://x.com/saystupidline\" target="_blank" className="p-4 bg-blue-500/50 border border-white/20 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 hover:bg-blue-600/50 backdrop-blur-md">
+                            <Twitter size={24}/> X
+                        </a>
+                        </div>
+
+                        <button onClick={() => { setDarkMode(!darkMode); setMobileMenuOpen(false); }} className="p-4 bg-white/10 border border-white/20 font-bold rounded-xl text-white mt-4 backdrop-blur-md hover:bg-white/20">
+                           {darkMode ? 'SWITCH TO LIGHT MODE' : 'SWITCH TO DARK MODE'}
+                        </button>
+                        
+                        <button onClick={() => signOut(auth)} className="p-4 bg-red-500/20 border border-red-500/50 text-red-300 font-bold rounded-xl mt-8 hover:bg-red-500/30 backdrop-blur-md">
+                            LOGOUT
+                        </button>
                     </div>
-                    <button onClick={() => { setDarkMode(!darkMode); setMobileMenuOpen(false); }} className="p-4 bg-gray-200 dark:bg-zinc-800 font-bold rounded-xl dark:text-white mt-4">
-                       {darkMode ? 'LIGHT MODE' : 'DARK MODE'}
-                    </button>
-                    <button onClick={() => signOut(auth)} className="p-4 bg-red-100 text-red-600 font-bold rounded-xl mt-8">LOGOUT</button>
                  </div>
               </div>
             )}
