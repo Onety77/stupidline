@@ -622,7 +622,18 @@ const drawNote = (ctx, note, currentUid, imageCache, templateImg, isDark, mouse,
             img.onload = () => imageCache.current.set(note.id, img);
         }
     } else {
-        ctx.fillStyle = note.style?.color || (isDark ? '#e4e4e7' : '#2d3436');
+        // Intelligent Color Swapping for Black/White
+        let textColor = note.style?.color || '#000000';
+        
+        // Normalize
+        const c = textColor.toLowerCase();
+        const isBlack = c === '#000000' || c === '#000' || c === 'black';
+        const isWhite = c === '#ffffff' || c === '#fff' || c === 'white';
+
+        if (isDark && isBlack) textColor = '#ffffff';
+        else if (!isDark && isWhite) textColor = '#000000';
+
+        ctx.fillStyle = textColor;
         ctx.font = '22px "Permanent Marker"';
         wrapText(ctx, note.content, 0, 0, width - 40, 28);
     }
@@ -744,7 +755,7 @@ const AuthScreen = ({ onLogin, darkMode }) => {
             <div className="group">
               <input 
                 type="password" 
-                placeholder="Secret Code" 
+                placeholder="password" 
                 className="w-full bg-gray-50 dark:bg-zinc-800 border-2 border-black dark:border-gray-600 p-4 font-bold rounded focus:border-[#ff4757] transition-colors" 
                 value={password} 
                 onChange={e=>setPassword(e.target.value)} 
